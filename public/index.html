@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BSN 2026: The Global Model</title>
+    <!-- Load TensorFlow.js and Socket.io -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; text-align: center; padding: 20px; background: #f4f4f9; }
+        button { display: block; width: 100%; padding: 20px; margin: 15px 0; font-size: 18px; border-radius: 10px; border: none; background: #007bff; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        button:disabled { background: #cccccc; }
+        #statusBox { background: white; padding: 15px; border-radius: 10px; margin-top: 20px; font-weight: bold; }
+        .circle { width: 150px; height: 150px; border-radius: 50%; margin: 30px auto; background: #ccc; display: flex; align-items: center; justify-content: center; font-weight: bold; color: white; font-size: 20px;}
+        .green { background: #28a745; }
+        .red { background: #dc3545; }
+    </style>
+</head>
+<body>
+
+    <h1>Federated Anomaly Detector</h1>
+    <p>Help build the Healthy Envelope.</p>
+
+    <!-- UI Controls -->
+    <button id="btnConnect" onclick="requestSensorAccess()">1. Connect Sensor</button>
+    <button id="btnTrain" onclick="trainLocalModel()" disabled>2. Train Local Model</button>
+    <button id="btnShare" onclick="shareWeights()" disabled>3. Share with Server</button>
+
+    <div id="statusBox">Status: Waiting to start...</div>
+    
+    <div id="testArea" style="display:none;">
+        <h2>Live Test</h2>
+        <div id="indicator" class="circle">TESTING</div>
+    </div>
+
+    <script>
+        const socket = io(); // Connect to your Node.js server
+        let sensorData = [];
+        let localModel;
+        
+        // --- 1. SENSOR COLLECTION ---
+        function requestSensorAccess() {
+            // iOS 13+ requires explicit user interaction to start the accelerometer
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                DeviceMotionEvent.requestPermission().then(permissionState => {
+                    if (permissionState === 'granted') {
+                        startCollecting();
+                    } else {
+                        updateStatus("Sensor permission denied.");
+                    }
+                }).catch(console.error);
+            } else {
+                startCollecting(); // Non-iOS devices
+            }
+        }
+
+        function startCollecting() {
+            updateStatus("Collecting Data (Move your arm!)...");
+            document.getElementById('btnConnect').disabled = true;
+            
+            window.addEventListener('devicemotion', (event) => {
+                // Collect X, Y, Z acceleration, ignoring nulls
+                if(event.acceleration.x !== null) {
+                    sensorData.push([
+                        event.acceleration.x,
+                        event.acceleration.y,
+                        event.acceleration.z
+                    ]);
+                }
+            });
+
+            // Collect for exactly 5 seconds, then stop
+            setTimeout(() => {
+                updateStatus(`Collected ${sensorData.length} data points. Ready to train.`);
+                document.getElementById('btnTrain').disabled = false;
+            }, 5000);
+        }
+
+        // --- 2. TENSORFLOW.JS AUTOENCODER ---
+        async function trainLocalModel() {
+            updateStatus("Training Model Locally...");
+            document.getElementById('btnTrain').disabled = true;
+
+            // Define the tiny Autoencoder
+            // Input (3) -> Bottleneck (2) -> Output (3)
+            localModel = tf.sequential();
+            localModel.add(tf.layers.dense({units: 2, activation: 'relu', inputShape: [3]}));
+            localModel.add(tf.layers.dense({units: 3, activation: 'linear'}));
+            localModel.compile({optimizer: 'adam', loss: 'meanSquaredError'});
+
+            // Convert JS array to a TensorFlow Tensor
+            const tensorData = tf.tensor2d(sensorData);
+
+            // Train the model to reconstruct its own input
+            await localModel.fit(tensorData, tensorData, {
+                epochs: 10,
+                batchSize: 32
+            });
+
+            updateStatus("Training Complete. Weights ready to share (0 KB raw data).");
+            document.getElementById('btnShare').disabled = false;
+        }
+
+        // --- 3. FEDERATED LEARNING COMMUNICATION ---
+        function shareWeights() {
+            updateStatus("Sending weights to central server...");
+            document.getElementById('btnShare').disabled = true;
+
+            // Extract the numerical matrices from the TF.js model
+            const weights = localModel.getWeights().map(w => w.arraySync());
+            
+            // Emit to Node.js backend
+            socket.emit('submit_local_weights', weights);
+            updateStatus("Weights sent. Waiting for Global Model...");
+        }
+
+        // Listen for the aggregated model from the server
+        socket.on('global_model_update', (globalWeightsData) => {
+            updateStatus("Global Model Received! Activating Live Test.");
+            
+            // Convert plain JS arrays back to TF.js tensors
+            const globalTensors = globalWeightsData.map(arr => tf.tensor(arr));
+            localModel.setWeights(globalTensors);
+            
+            // Reveal the testing UI
+            document.getElementById('testArea').style.display = 'block';
+            startLiveTesting();
+        });
+
+        // --- 4. LIVE TESTING ---
+        function startLiveTesting() {
+            // Continuously evaluate new motion against the global model
+            setInterval(async () => {
+                if(sensorData.length > 0) {
+                    const latestPoint = tf.tensor2d([sensorData[sensorData.length - 1]]);
+                    const prediction = localModel.predict(latestPoint);
+                    
+                    // Calculate reconstruction error
+                    const error = latestPoint.sub(prediction).square().mean().dataSync()[0];
+                    
+                    // If error is high, the model has never seen this movement (Anomaly!)
+                    const indicator = document.getElementById('indicator');
+                    if (error > 2.5) { // Arbitrary threshold for the demo
+                        indicator.className = "circle red";
+                        indicator.innerText = "COMPENSATORY";
+                    } else {
+                        indicator.className = "circle green";
+                        indicator.innerText = "SMOOTH";
+                    }
+                }
+            }, 200);
+        }
+
+        function updateStatus(msg) {
+            document.getElementById('statusBox').innerText = "Status: " + msg;
+        }
+    </script>
+</body>
+</html>
