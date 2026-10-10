@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Server Dashboard - BSN 2026</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #1e1e2f; color: white; text-align: center; padding: 50px; }
+        .grid { display: flex; justify-content: space-around; margin-top: 50px; }
+        .card { background: #2a2a40; padding: 30px; border-radius: 15px; width: 30%; }
+        .number { font-size: 4rem; font-weight: bold; color: #00d2ff; margin: 20px 0; }
+        .privacy-safe { color: #28a745; }
+        .status-log { text-align: left; background: #111; padding: 15px; border-radius: 5px; height: 200px; overflow-y: auto; font-family: monospace; color: #00ff00; }
+    </style>
+</head>
+<body>
+    <h1>Federated Mission Control</h1>
+    
+    <div class="grid">
+        <div class="card">
+            <h3>Raw Sensor Data Received</h3>
+            <div class="number privacy-safe">0 KB</div>
+            <p>Data never leaves the phones.</p>
+        </div>
+        
+        <div class="card">
+            <h3>Global Model Updates</h3>
+            <div class="number" id="updateCount">0</div>
+            <p>Successful FedAvg Rounds.</p>
+        </div>
+        
+        <div class="card">
+            <h3>Live Network Log</h3>
+            <div id="log" class="status-log">Listening for connections...<br></div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let rounds = 0;
+        const logBox = document.getElementById('log');
+
+        function appendLog(msg) {
+            logBox.innerHTML += `> ${msg}<br>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        // Listen for the global model broadcast to know when an aggregation occurred
+        socket.on('global_model_update', () => {
+            rounds++;
+            document.getElementById('updateCount').innerText = rounds;
+            appendLog("✅ SUCCESS: FedAvg triggered. New global model broadcasted to all devices.");
+        });
+    </script>
+</body>
+</html>
